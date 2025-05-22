@@ -1,0 +1,7 @@
+Even with great feature engineering:
+
+Always evaluate model performance with multiple metrics (RMSE, MAE, R²).
+
+Run diagnostics like residual plots to check for patterns or remaining issues.
+
+Test how much performance drops when you remove certain features — this helps identify hidden issues.
