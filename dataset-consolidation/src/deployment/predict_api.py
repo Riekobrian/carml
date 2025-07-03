@@ -27,6 +27,7 @@ app = FastAPI(
 
 # MODIFIED: Point directly to your specific artifact folder
 MODEL_ARTIFACTS_DIR = r"D:\SBT-JAPAN\Alpha GO\dataset-consolidation\src\deployment\model_artifacts\20250520_190019_stacking_model"
+# MODEL_ARTIFACTS_DIR = r"D:\SBT-JAPAN\Alpha GO\dataset-consolidation\src\deployment\model_artifacts\stacking_model_cond_fix"
 
 # Global variables
 model = None
@@ -136,6 +137,8 @@ def load_artifacts():
         # Example: We expect 500 features based on our last run
         if len(selected_feature_names) != 500: # Adjust 500 if your number of selected features is different
              logging.warning(f"Loaded {len(selected_feature_names)} selected features, but expected 500. Check '{selected_features_filename}'.")
+        # if len(selected_feature_names) != 503: # Adjust 500 if your number of selected features is different
+        #      logging.warning(f"Loaded {len(selected_feature_names)} selected features, but expected 503. Check '{selected_features_filename}'.")     
 
     except Exception as e:
         logging.error(f"Error loading artifacts: {e}", exc_info=True)

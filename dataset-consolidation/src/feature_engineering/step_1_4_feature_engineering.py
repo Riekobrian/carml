@@ -3,6 +3,8 @@ import numpy as np
 from datetime import datetime
 import logging
 import os
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # --- Configuration ---
 # Correct WORKSPACE_ROOT to point to the actual project root (three levels up)
@@ -35,6 +37,61 @@ OUTPUT_FILE_PATH = os.path.join(OUTPUT_DATA_DIR, OUTPUT_CSV_NAME)
 
 # Ensure output directory exists (INPUT_DATA_DIR and OUTPUT_DATA_DIR are the same here)
 os.makedirs(OUTPUT_DATA_DIR, exist_ok=True)
+
+# --- NEW: Visualization Setup ---
+VISUALIZATION_PARENT_DIR = os.path.join(WORKSPACE_ROOT, "dataset-consolidation", "visualizations")
+os.makedirs(VISUALIZATION_PARENT_DIR, exist_ok=True)
+CURRENT_RUN_TIMESTAMP = datetime.now().strftime('%Y%m%d_%H%M%S')
+VISUALIZATION_DIR = os.path.join(VISUALIZATION_PARENT_DIR, f"step_1_4_plots_{CURRENT_RUN_TIMESTAMP}")
+os.makedirs(VISUALIZATION_DIR, exist_ok=True)
+logging.info(f"Plots will be saved to: {VISUALIZATION_DIR}")
+
+# --- Plotting Helper Functions ---
+def save_plot(fig, plot_name_prefix):
+    """Saves the given matplotlib figure to the VISUALIZATION_DIR with a timestamp."""
+    plot_filename = f"{plot_name_prefix}_{datetime.now().strftime('%Y%m%d%H%M%S')}.png"
+    file_path = os.path.join(VISUALIZATION_DIR, plot_filename)
+    try:
+        fig.savefig(file_path, bbox_inches='tight')
+        plt.close(fig) # Close the figure to free memory
+        logging.info(f"Saved plot: {file_path}")
+    except Exception as e:
+        logging.error(f"Failed to save plot {file_path}. Error: {e}")
+        plt.close(fig) # Still try to close
+
+def plot_numeric_distribution(series, title, plot_filename_prefix, bins='auto'):
+    """Plots and saves the distribution of a numeric series."""
+    if series is None or series.dropna().empty:
+        logging.warning(f"Numeric series for '{title}' is empty or all NaN. Skipping plot.")
+        return
+    plt.figure(figsize=(10, 6))
+    sns.histplot(series.dropna(), kde=True, bins=bins)
+    plt.title(title)
+    plt.xlabel(series.name if series.name else "Value")
+    plt.ylabel('Frequency')
+    fig = plt.gcf()
+    save_plot(fig, plot_filename_prefix)
+
+def plot_categorical_distribution(series, title, plot_filename_prefix, top_n=30):
+    """Plots and saves the distribution of a categorical series."""
+    if series is None or series.dropna().empty:
+        logging.warning(f"Categorical series for '{title}' is empty or all NaN. Skipping plot.")
+        return
+    plt.figure(figsize=(12, 8)) # Increased figure size for better readability of labels
+    counts = series.value_counts(dropna=False)
+    plot_title = title
+    if len(counts) > top_n:
+        counts = counts.nlargest(top_n)
+        plot_title += f" (Top {top_n})"
+    
+    sns.barplot(x=counts.index.astype(str), y=counts.values, palette="viridis")
+    plt.title(plot_title)
+    plt.xlabel(series.name if series.name else "Category")
+    plt.ylabel('Count')
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout() # Adjust layout to prevent labels from being cut off
+    fig = plt.gcf()
+    save_plot(fig, plot_filename_prefix)
 
 # --- Helper Functions ---
 def clean_column_names(df):
@@ -70,12 +127,18 @@ def main():
     USD_TO_KES_RATE = 130  # Agreed exchange rate
 
     if 'price' in df_processed.columns and 'currency_code' in df_processed.columns:
+        # Original price distribution (numeric part only, before currency conversion)
+        if 'price' in df.columns: # Plot from original df
+            plot_numeric_distribution(pd.to_numeric(df['price'], errors='coerce'),
+                                      'Original Price Distribution (Before Any Processing)',
+                                      'price_original_dist')
+
         # Ensure currency_code is standardized (lowercase) for consistent checks
         df_processed['currency_code'] = df_processed['currency_code'].astype(str).str.lower().str.strip()
         
         logging.info(f"Original currency_code value counts:\\n{df_processed['currency_code'].value_counts(dropna=False)}")
-
-        # Identify rows with USD currency
+        plot_categorical_distribution(df_processed['currency_code'], 'Currency Code Distribution (Before Standardization)', 'currency_code_before_std_dist')
+        
         usd_rows = df_processed['currency_code'] == 'usd'
         
         # --- NEW: Adjust FOB USD prices to estimated total USD prices ---
@@ -104,6 +167,7 @@ def main():
         # Or, we can just proceed knowing prices are KES and drop currency_code later.
         # For now, let's log that prices are KES and the original currency_code might be dropped later.
         logging.info("Price column is now assumed to be in KES after USD conversion.")
+        plot_numeric_distribution(df_processed['price'], 'Price Distribution (After Currency Standardization, Before Imputation)', 'price_after_currency_std_dist')
 
     else:
         logging.warning("'price' or 'currency_code' column not found. Cannot perform currency standardization.")
@@ -121,8 +185,10 @@ def main():
             df_processed['price'] = df_processed['price'].fillna(median_price)
             logging.info(f"NaNs in 'price' imputed with median: {median_price}")
         
+        plot_numeric_distribution(df_processed['price'], 'Price Distribution (After Imputation, Before Log Transform)', 'price_after_imputation_dist')
         df_processed['price_log'] = np.log1p(df_processed['price'])
         logging.info("'price_log' created.")
+        plot_numeric_distribution(df_processed['price_log'], 'Price_Log Distribution (Target Variable)', 'price_log_dist')
         # Verify transformation (optional, good for debugging)
         # logging.info(f"Price skewness: {df_processed['price'].skew()}, Price_log skewness: {df_processed['price_log'].skew()}")
     else:
@@ -140,6 +206,10 @@ def main():
         logging.info("Processing 'year_of_manufacture' and 'car_age'...")
         current_year = datetime.now().year
         
+        plot_numeric_distribution(pd.to_numeric(df['year_of_manufacture'], errors='coerce'), # Plot from original df
+                                  'Original Year of Manufacture Distribution',
+                                  'year_of_manufacture_original_dist')
+        
         # Ensure 'year_of_manufacture' is numeric, coercing errors
         df_processed['year_of_manufacture_num'] = pd.to_numeric(df_processed['year_of_manufacture'], errors='coerce')
         
@@ -154,6 +224,9 @@ def main():
             # df_processed['year_of_manufacture_num'].fillna(median_year_overall, inplace=True) # Old way
             df_processed['year_of_manufacture_num'] = df_processed['year_of_manufacture_num'].fillna(median_year_overall)
             logging.info(f"NaNs and 0s in 'year_of_manufacture_num' imputed with overall median: {median_year_overall:.0f}")
+            plot_numeric_distribution(df_processed['year_of_manufacture_num'],
+                                      'Year of Manufacture Distribution (After Cleaning & Imputation)',
+                                      'year_of_manufacture_num_dist')
         else:
             # Fallback if no valid years, though unlikely
             # df_processed['year_of_manufacture_num'].fillna(current_year - 10, inplace=True) # e.g., 10 years old # Old way
@@ -168,15 +241,21 @@ def main():
         if df_processed['car_age'].isnull().any():
             median_car_age = df_processed['car_age'].median()
             df_processed['car_age'] = df_processed['car_age'].fillna(median_car_age)
+        plot_numeric_distribution(df_processed['car_age'], 'Car Age Distribution', 'car_age_dist')
 
         df_processed['car_age_squared'] = df_processed['car_age'] ** 2
         logging.info("'car_age' and 'car_age_squared' engineered.")
+        plot_numeric_distribution(df_processed['car_age_squared'], 'Car Age Squared Distribution', 'car_age_squared_dist')
     else:
         logging.warning("'year_of_manufacture' column not found. Cannot engineer 'car_age'.")
 
     # --- Mileage ---
     if 'mileage' in df_processed.columns:
         logging.info("Processing 'mileage'...")
+        plot_numeric_distribution(pd.to_numeric(df['mileage'], errors='coerce'), # Plot from original df
+                                  'Original Mileage Distribution',
+                                  'mileage_original_dist')
+        
         df_processed['mileage_num'] = pd.to_numeric(df_processed['mileage'], errors='coerce')
         # Handle 0s: np.log1p will handle 0s appropriately. Explicit investigation for true 0s vs placeholders is a deeper dive.
         # Impute NaNs (169 identified in EDA) with median
@@ -184,9 +263,11 @@ def main():
         # df_processed['mileage_num'].fillna(median_mileage, inplace=True) # Old way
         df_processed['mileage_num'] = df_processed['mileage_num'].fillna(median_mileage)
         logging.info(f"NaNs in 'mileage_num' imputed with median: {median_mileage}")
+        plot_numeric_distribution(df_processed['mileage_num'], 'Mileage Distribution (After Imputation)', 'mileage_num_dist')
 
         df_processed['mileage_log'] = np.log1p(df_processed['mileage_num'])
         logging.info("'mileage_log' engineered.")
+        plot_numeric_distribution(df_processed['mileage_log'], 'Mileage Log Distribution', 'mileage_log_dist')
 
         # Mileage per Year (Requires car_age to be processed first)
         if 'car_age' in df_processed.columns:
@@ -199,6 +280,7 @@ def main():
                 median_mileage_per_year = df_processed['mileage_per_year'].median()
                 df_processed['mileage_per_year'] = df_processed['mileage_per_year'].fillna(median_mileage_per_year)
             logging.info("'mileage_per_year' engineered.")
+            plot_numeric_distribution(df_processed['mileage_per_year'], 'Mileage Per Year Distribution', 'mileage_per_year_dist')
         else:
             logging.warning("'car_age' not available, cannot compute 'mileage_per_year'.")
     else:
@@ -210,6 +292,10 @@ def main():
     # Let's assume the input column is 'engine_size_cc' and we create 'engine_size_cc_num'
     if 'engine_size_cc' in df_processed.columns:
         logging.info("Processing 'engine_size_cc'...")
+        plot_numeric_distribution(pd.to_numeric(df['engine_size_cc'], errors='coerce'), # Plot from original df
+                                  'Original Engine Size CC Distribution',
+                                  'engine_size_cc_original_dist')
+        
         df_processed['engine_size_cc_num'] = pd.to_numeric(df_processed['engine_size_cc'], errors='coerce')
         
         # Handle 0s (identified in EDA, treat as NaN for imputation or specific value if known)
@@ -223,9 +309,11 @@ def main():
         # df_processed['engine_size_cc_num'].fillna(median_engine_size, inplace=True) # Old way
         df_processed['engine_size_cc_num'] = df_processed['engine_size_cc_num'].fillna(median_engine_size)
         logging.info(f"NaNs (and 0s) in 'engine_size_cc_num' imputed with median: {median_engine_size}")
+        plot_numeric_distribution(df_processed['engine_size_cc_num'], 'Engine Size CC Distribution (After Imputation)', 'engine_size_cc_num_dist')
         
         df_processed['engine_size_cc_log'] = np.log1p(df_processed['engine_size_cc_num'])
         logging.info("'engine_size_cc_log' engineered.")
+        plot_numeric_distribution(df_processed['engine_size_cc_log'], 'Engine Size CC Log Distribution', 'engine_size_cc_log_dist')
     else:
         logging.warning("'engine_size_cc' column not found.")
 
@@ -233,6 +321,10 @@ def main():
     # Similar to engine_size, assuming input column is 'horse_power'
     if 'horse_power' in df_processed.columns:
         logging.info("Processing 'horse_power'...")
+        plot_numeric_distribution(pd.to_numeric(df['horse_power'], errors='coerce'), # Plot from original df
+                                  'Original Horse Power Distribution',
+                                  'horse_power_original_dist')
+        
         df_processed['horse_power_num'] = pd.to_numeric(df_processed['horse_power'], errors='coerce')
         # EDA showed a max of ~1841 HP. Capping extreme outliers.
         # upper_cap_hp = df_processed['horse_power_num'].quantile(0.999) # Example: 99.9th percentile
@@ -243,34 +335,47 @@ def main():
         # df_processed['horse_power_num'].fillna(median_hp, inplace=True) # Old way
         df_processed['horse_power_num'] = df_processed['horse_power_num'].fillna(median_hp)
         logging.info(f"NaNs in 'horse_power_num' imputed with median: {median_hp}")
+        plot_numeric_distribution(df_processed['horse_power_num'], 'Horse Power Distribution (After Imputation)', 'horse_power_num_dist')
 
         df_processed['horse_power_log'] = np.log1p(df_processed['horse_power_num'])
         logging.info("'horse_power_log' engineered.")
+        plot_numeric_distribution(df_processed['horse_power_log'], 'Horse Power Log Distribution', 'horse_power_log_dist')
     else:
         logging.warning("'horse_power' column not found.")
 
     # --- Torque ---
     if 'torque' in df_processed.columns:
         logging.info("Processing 'torque'...")
+        plot_numeric_distribution(pd.to_numeric(df['torque'], errors='coerce'), # Plot from original df
+                                  'Original Torque Distribution',
+                                  'torque_original_dist')
+        
         df_processed['torque_num'] = pd.to_numeric(df_processed['torque'], errors='coerce')
         median_torque = df_processed['torque_num'].median()
         # df_processed['torque_num'].fillna(median_torque, inplace=True) # Old way
         df_processed['torque_num'] = df_processed['torque_num'].fillna(median_torque)
         logging.info(f"NaNs in 'torque_num' imputed with median: {median_torque}")
+        plot_numeric_distribution(df_processed['torque_num'], 'Torque Distribution (After Imputation)', 'torque_num_dist')
 
         df_processed['torque_log'] = np.log1p(df_processed['torque_num'])
         logging.info("'torque_log' engineered.")
+        plot_numeric_distribution(df_processed['torque_log'], 'Torque Log Distribution', 'torque_log_dist')
     else:
         logging.warning("'torque' column not found.")
 
     # --- Acceleration ---
     if 'acceleration' in df_processed.columns:
         logging.info("Processing 'acceleration'...")
+        plot_numeric_distribution(pd.to_numeric(df['acceleration'], errors='coerce'), # Plot from original df
+                                  'Original Acceleration Distribution',
+                                  'acceleration_original_dist')
+        
         df_processed['acceleration_num'] = pd.to_numeric(df_processed['acceleration'], errors='coerce')
         median_accel = df_processed['acceleration_num'].median()
         # df_processed['acceleration_num'].fillna(median_accel, inplace=True) # Old way
         df_processed['acceleration_num'] = df_processed['acceleration_num'].fillna(median_accel)
         logging.info(f"NaNs in 'acceleration_num' imputed with median: {median_accel}")
+        plot_numeric_distribution(df_processed['acceleration_num'], 'Acceleration Distribution (After Imputation)', 'acceleration_num_dist')
         # Log transform was considered but distribution was fairly symmetrical. 
         # We can add it if model performance suggests it later: df_processed['acceleration_log'] = np.log1p(df_processed['acceleration_num'])
     else:
@@ -279,6 +384,10 @@ def main():
     # --- Seats ---
     if 'seats' in df_processed.columns:
         logging.info("Processing 'seats'...")
+        plot_numeric_distribution(pd.to_numeric(df['seats'], errors='coerce'), # Plot from original df
+                                  'Original Seats Distribution',
+                                  'seats_original_dist')
+        
         df_processed['seats_num'] = pd.to_numeric(df_processed['seats'], errors='coerce')
         # Seats is somewhat discrete/ordinal. Median imputation is reasonable.
         median_seats = df_processed['seats_num'].median()
@@ -287,6 +396,7 @@ def main():
         # Ensure it's integer after imputation
         df_processed['seats_num'] = df_processed['seats_num'].round().astype('Int64') 
         logging.info(f"NaNs in 'seats_num' imputed with median: {median_seats} and converted to Int64.")
+        plot_numeric_distribution(df_processed['seats_num'], 'Seats Distribution (After Imputation)', 'seats_num_dist')
     else:
         logging.warning("'seats' column not found.")
 
@@ -306,6 +416,12 @@ def main():
     # Standardize all specified categorical columns first
     for col in categorical_cols_to_process:
         if col in df_processed.columns:
+            # Plot distribution from original df (after basic clean_column_names, before extensive cleaning in this loop)
+            if col in df.columns: # Check if column exists in original df
+                 plot_categorical_distribution(df[col].astype(str).str.lower().str.strip(),
+                                              f'Original {col} Distribution',
+                                              f'{col}_original_dist')
+            
             logging.info(f"Standardizing categorical column: {col}...")
             # Convert to string, strip whitespace, convert to lowercase
             df_processed[col] = df_processed[col].astype(str).str.strip().str.lower()
@@ -333,6 +449,10 @@ def main():
     # --- Fuel Type Consolidation ---
     if 'fuel_type' in df_processed.columns:
         logging.info("Consolidating 'fuel_type'...")
+        # Plotting 'fuel_type' after generic cleaning but before specific consolidation
+        plot_categorical_distribution(df_processed['fuel_type'],
+                                      'Fuel Type Distribution (After Generic Cleaning, Before Consolidation)',
+                                      'fuel_type_before_consolidation_dist')
         fuel_type_map = {
             'petroleum': 'petrol',
             'hybrid(petrol)': 'hybrid_petrol',
@@ -346,13 +466,19 @@ def main():
         df_processed['fuel_type_cleaned'] = df_processed['fuel_type'].replace(fuel_type_map)
         # For values not in map, they remain as they are (already lowercased and stripped)
         # Recount values after cleaning for logging
-        logging.info(f"Value counts for 'fuel_type_cleaned':\n{df_processed['fuel_type_cleaned'].value_counts(dropna=False)}")
+        logging.info(f"Value counts for 'fuel_type_cleaned':\\n{df_processed['fuel_type_cleaned'].value_counts(dropna=False)}")
+        plot_categorical_distribution(df_processed['fuel_type_cleaned'],
+                                      'Fuel Type Cleaned Distribution',
+                                      'fuel_type_cleaned_dist')
     else:
         logging.warning("'fuel_type' column not found for consolidation.")
 
     # --- Transmission Consolidation ---
     if 'transmission' in df_processed.columns:
         logging.info("Consolidating 'transmission'...")
+        plot_categorical_distribution(df_processed['transmission'],
+                                      'Transmission Distribution (After Generic Cleaning, Before Consolidation)',
+                                      'transmission_before_consolidation_dist')
         # Values from EDA: at, automatic, mt, 6mt, 5mt, manual, nan, 7mt, duonic, smoother, proshift, 4mt
         transmission_map = {
             'at': 'automatic',
@@ -367,13 +493,19 @@ def main():
             # 'automatic', 'manual' remain as is after lowercase
         }
         df_processed['transmission_cleaned'] = df_processed['transmission'].replace(transmission_map)
-        logging.info(f"Value counts for 'transmission_cleaned':\n{df_processed['transmission_cleaned'].value_counts(dropna=False)}")
+        logging.info(f"Value counts for 'transmission_cleaned':\\n{df_processed['transmission_cleaned'].value_counts(dropna=False)}")
+        plot_categorical_distribution(df_processed['transmission_cleaned'],
+                                      'Transmission Cleaned Distribution',
+                                      'transmission_cleaned_dist')
     else:
         logging.warning("'transmission' column not found for consolidation.")
 
     # --- Drive Type Consolidation ---
     if 'drive_type' in df_processed.columns:
         logging.info("Consolidating 'drive_type'...")
+        plot_categorical_distribution(df_processed['drive_type'],
+                                      'Drive Type Distribution (After Generic Cleaning, Before Consolidation)',
+                                      'drive_type_before_consolidation_dist')
         # EDA: 2wd, 4wd, awd, fr, nan, ff, mr, fwd, rwd, rr, 04-feb
         # Standard cleaning should have made '04-feb' into np.nan, then 'unknown'
         drive_type_map = {
@@ -398,13 +530,19 @@ def main():
         #     '2wd_rear_engine': '2wd'
         # }
         # df_processed['drive_type_cleaned'] = df_processed['drive_type_cleaned'].replace(simplified_2wd_map)
-        logging.info(f"Value counts for 'drive_type_cleaned':\n{df_processed['drive_type_cleaned'].value_counts(dropna=False)}")
+        logging.info(f"Value counts for 'drive_type_cleaned':\\n{df_processed['drive_type_cleaned'].value_counts(dropna=False)}")
+        plot_categorical_distribution(df_processed['drive_type_cleaned'],
+                                      'Drive Type Cleaned Distribution',
+                                      'drive_type_cleaned_dist')
     else:
         logging.warning("'drive_type' column not found for consolidation.")
 
     # --- Condition Recoding (User Specified Logic) ---
     if 'condition' in df_processed.columns:
         logging.info("Recoding 'condition' to 'condition_clean' (Accident free / Accident involved)...")
+        plot_categorical_distribution(df_processed['condition'], # After generic cleaning
+                                      'Condition Distribution (After Generic Cleaning, Before Recoding)',
+                                      'condition_before_recode_dist')
         # Original distinct values from user: 
         # Foreign Used, Excellent, Very Good, 4.5, NaN, Locally Used, 5, Ready For Import, 6, New, 4
         # Note: Our generic cleaner above would have turned string 'nan' into np.nan.
@@ -432,13 +570,19 @@ def main():
         # Explicitly map np.nan in original 'condition' to "Accident free"
         df_processed.loc[df_processed['condition'].isnull(), 'condition_clean'] = "Accident free"
         
-        logging.info(f"Value counts for 'condition_clean':\n{df_processed['condition_clean'].value_counts(dropna=False)}")
+        logging.info(f"Value counts for 'condition_clean':\\n{df_processed['condition_clean'].value_counts(dropna=False)}")
+        plot_categorical_distribution(df_processed['condition_clean'],
+                                      'Condition Cleaned Distribution (Recoded)',
+                                      'condition_clean_dist')
     else:
         logging.warning("'condition' column not found for user-specified recoding.")
 
     # --- Usage Type Recoding (User Specified Logic) ---
     if 'usage_type' in df_processed.columns:
         logging.info("Recoding 'usage_type' to 'usage_type_clean' (Foreign Used / Kenyan Used)...")
+        plot_categorical_distribution(df_processed['usage_type'], # After generic cleaning
+                                      'Usage Type Distribution (After Generic Cleaning, Before Recoding)',
+                                      'usage_type_before_recode_dist')
         # Original distinct values from user for foreign_used: "Foreign Used", "New", "Ready For Import", "Brand New"
         # Original distinct values from user for kenyan_used: "Kenyan Used", "Locally Used", "Used"
         # NaN was to be mapped to "Kenyan Used".
@@ -460,13 +604,19 @@ def main():
             logging.warning(f"Some 'usage_type' values were not mapped to Foreign/Kenyan Used and were not NaN. They are: {df_processed[df_processed['usage_type_clean'] == 'Unknown_Usage']['usage_type'].unique()}. Defaulting them to Kenyan Used as per NaN rule or review.")
             df_processed.loc[df_processed['usage_type_clean'] == 'Unknown_Usage', 'usage_type_clean'] = "Kenyan Used"
 
-        logging.info(f"Value counts for 'usage_type_clean':\n{df_processed['usage_type_clean'].value_counts(dropna=False)}")
+        logging.info(f"Value counts for 'usage_type_clean':\\n{df_processed['usage_type_clean'].value_counts(dropna=False)}")
+        plot_categorical_distribution(df_processed['usage_type_clean'],
+                                      'Usage Type Cleaned Distribution (Recoded)',
+                                      'usage_type_clean_dist')
     else:
         logging.warning("'usage_type' column not found for user-specified recoding.")
 
     # --- Body Type Consolidation ---
     if 'body_type' in df_processed.columns:
         logging.info("Consolidating 'body_type'...")
+        plot_categorical_distribution(df_processed['body_type'],
+                                      'Body Type Distribution (After Generic Cleaning, Before Consolidation)',
+                                      'body_type_before_consolidation_dist')
         # EDA: suv, hatchback, sedan, mini van, coupe, truck, saloon, van, station wagon, wagon, convertible, bus, pickup, 
         # mini suv, nan, minivan, double cab, pick up, pickups, pickup truck, buses and vans, coupes, estate, other, truck wing
         body_type_map = {
@@ -496,7 +646,10 @@ def main():
         #     df_processed.loc[df_processed['body_type_cleaned'].isin(to_replace_body_type), 'body_type_cleaned'] = 'other_body_type'
         #     logging.info(f"Grouped rare body types into 'other_body_type'. Categories replaced: {to_replace_body_type.tolist()}")
 
-        logging.info(f"Value counts for 'body_type_cleaned':\n{df_processed['body_type_cleaned'].value_counts(dropna=False)}")
+        logging.info(f"Value counts for 'body_type_cleaned':\\n{df_processed['body_type_cleaned'].value_counts(dropna=False)}")
+        plot_categorical_distribution(df_processed['body_type_cleaned'],
+                                      'Body Type Cleaned Distribution',
+                                      'body_type_cleaned_dist')
     else:
         logging.warning("'body_type' column not found for consolidation.")
 
@@ -506,6 +659,11 @@ def main():
 
     if 'make_name' in df_processed.columns:
         logging.info("Processing 'make_name' (high cardinality)...")
+        # Plot 'make_name' after generic cleaning but before grouping rare makes
+        plot_categorical_distribution(df_processed['make_name'],
+                                      'Make Name Distribution (After Generic Cleaning, Before Grouping Rare)',
+                                      'make_name_before_grouping_dist', top_n=50)
+        
         make_counts = df_processed['make_name'].value_counts()
         # Determine a threshold for grouping. E.g., makes appearing less than N times.
         # This threshold might need tuning. Let's use 0.1% of total data as a starting point, or a fixed number like 10-20.
@@ -514,12 +672,19 @@ def main():
         
         df_processed['make_name_cleaned'] = df_processed['make_name'].apply(lambda x: 'other_make' if x in makes_to_group else x)
         logging.info(f"Grouped {len(makes_to_group)} rare makes into 'other_make' (threshold < {make_threshold} occurrences).")
-        logging.info(f"Value counts for 'make_name_cleaned':\n{df_processed['make_name_cleaned'].value_counts(dropna=False)}")
+        logging.info(f"Value counts for 'make_name_cleaned':\\n{df_processed['make_name_cleaned'].value_counts(dropna=False)}")
+        plot_categorical_distribution(df_processed['make_name_cleaned'],
+                                      'Make Name Cleaned Distribution (Rare Grouped)',
+                                      'make_name_cleaned_dist', top_n=50)
     else:
         logging.warning("'make_name' column not found.")
 
     if 'model_name' in df_processed.columns:
         logging.info("Processing 'model_name' (very high cardinality)...")
+        plot_categorical_distribution(df_processed['model_name'],
+                                      'Model Name Distribution (After Generic Cleaning, Before Grouping Rare)',
+                                      'model_name_before_grouping_dist', top_n=50)
+        
         model_counts = df_processed['model_name'].value_counts()
         # More aggressive threshold for model_name
         model_threshold = max(5, int(len(df_processed) * 0.0005)) # Even smaller percentage or fixed low number
@@ -527,7 +692,10 @@ def main():
         
         df_processed['model_name_cleaned'] = df_processed['model_name'].apply(lambda x: 'other_model' if x in models_to_group else x)
         logging.info(f"Grouped {len(models_to_group)} rare models into 'other_model' (threshold < {model_threshold} occurrences).")
-        logging.info(f"Value counts for 'model_name_cleaned':\n{df_processed['model_name_cleaned'].value_counts(dropna=False)}")
+        logging.info(f"Value counts for 'model_name_cleaned':\\n{df_processed['model_name_cleaned'].value_counts(dropna=False)}")
+        plot_categorical_distribution(df_processed['model_name_cleaned'],
+                                      'Model Name Cleaned Distribution (Rare Grouped)',
+                                      'model_name_cleaned_dist', top_n=50)
     else:
         logging.warning("'model_name' column not found.")
 
@@ -550,6 +718,7 @@ def main():
             median_power_per_cc = df_processed['power_per_cc'].median()
             df_processed['power_per_cc'] = df_processed['power_per_cc'].fillna(median_power_per_cc)
         logging.info("Engineered 'power_per_cc'.")
+        plot_numeric_distribution(df_processed['power_per_cc'], 'Power Per CC Distribution', 'power_per_cc_dist')
     else:
         logging.warning("Cannot create 'power_per_cc'. Missing 'horse_power_num' or 'engine_size_cc_num'.")
 
@@ -561,6 +730,7 @@ def main():
             median_mileage_per_cc = df_processed['mileage_per_cc'].median()
             df_processed['mileage_per_cc'] = df_processed['mileage_per_cc'].fillna(median_mileage_per_cc)
         logging.info("Engineered 'mileage_per_cc'.")
+        plot_numeric_distribution(df_processed['mileage_per_cc'], 'Mileage Per CC Distribution', 'mileage_per_cc_dist')
     else:
         logging.warning("Cannot create 'mileage_per_cc'. Missing 'mileage_num' or 'engine_size_cc_num'.")
 
@@ -578,6 +748,7 @@ def main():
         df_processed['is_luxury_make'] = df_processed['make_name_cleaned'].isin(luxury_makes_list).astype(int)
         logging.info("Engineered 'is_luxury_make' flag.")
         logging.info(f"Count of luxury makes: {df_processed['is_luxury_make'].sum()}")
+        plot_categorical_distribution(df_processed['is_luxury_make'], 'Is Luxury Make Distribution', 'is_luxury_make_dist')
     else:
         logging.warning("'make_name_cleaned' not found. Cannot create 'is_luxury_make'.")
 
@@ -585,6 +756,9 @@ def main():
     if 'make_name_cleaned' in df_processed.columns and 'model_name_cleaned' in df_processed.columns:
         df_processed['make_model_cleaned'] = df_processed['make_name_cleaned'] + '_' + df_processed['model_name_cleaned']
         logging.info("Engineered 'make_model_cleaned' interaction feature.")
+        plot_categorical_distribution(df_processed['make_model_cleaned'],
+                                      'Make-Model Cleaned Interaction Distribution',
+                                      'make_model_cleaned_dist', top_n=50)
         # This new feature will also be high cardinality and might need target encoding or similar strategies later.
         # For now, we create it. It can be optionally dropped before one-hot encoding if too complex.
         # logging.info(f"Unique make_model_cleaned combinations: {df_processed['make_model_cleaned'].nunique()}")
@@ -657,9 +831,33 @@ def main():
 
     # Example: Log null value counts for key engineered features
     key_engineered_cols = ['price_log', 'car_age', 'car_age_squared'] # Add more as they are created
-    for col in key_engineered_cols:
+    # Add more key engineered columns for quick null check logging + plotting final state
+    final_check_cols_numeric = [
+        'price_log', 'car_age', 'car_age_squared', 'mileage_log', 'engine_size_cc_log',
+        'horse_power_log', 'torque_log', 'acceleration_num', 'seats_num',
+        'power_per_cc', 'mileage_per_year', 'mileage_per_cc'
+    ]
+    final_check_cols_categorical = [
+        'fuel_type_cleaned', 'transmission_cleaned', 'drive_type_cleaned',
+        'condition_clean', 'usage_type_clean', 'body_type_cleaned',
+        'make_name_cleaned', 'model_name_cleaned', 'is_luxury_make', 'make_model_cleaned'
+    ]
+
+    logging.info("--- Final Null Counts & Distributions for Key Engineered Features ---")
+    for col in final_check_cols_numeric:
         if col in df_processed.columns:
             logging.info(f"Nulls in '{col}': {df_processed[col].isnull().sum()}")
+            plot_numeric_distribution(df_processed[col], f'Final Distribution: {col}', f'{col}_final_dist')
+        else:
+            logging.warning(f"Final check: Column '{col}' not found in processed DataFrame.")
+
+    for col in final_check_cols_categorical:
+        if col in df_processed.columns:
+            logging.info(f"Nulls in '{col}': {df_processed[col].isnull().sum()} | Unique values: {df_processed[col].nunique()}")
+            plot_categorical_distribution(df_processed[col], f'Final Distribution: {col}', f'{col}_final_dist', top_n=40)
+        else:
+            logging.warning(f"Final check: Column '{col}' not found in processed DataFrame.")
+
 
     try:
         df_processed.to_csv(OUTPUT_FILE_PATH, index=False)

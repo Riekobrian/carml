@@ -1,0 +1,38 @@
+# Ignore Python virtual environments
+carenv/
+
+# Ignore data files
+/data/
+!/data/README.md
+
+# Ignore model files
+/models/
+!/models/README.md
+
+# Ignore logs
+/logs/
+
+# Ignore outputs and checkpoints
+*.ckpt
+*.h5
+*.pth
+*.pkl
+*.joblib
+
+# Ignore notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore build folders
+/build/
+
+# Ignore temporary files
+*.tmp
+*.log
+*.bak
+
+# Ignore VSCode settings
+.vscode/
